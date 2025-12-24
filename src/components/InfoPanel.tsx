@@ -165,9 +165,9 @@ export function InfoPanel({ visitor, isCurrentUser, onClose, aiLoading }: InfoPa
                 label="Coordinates"
                 value={isCurrentUser
                   ? `${server.geo.lat.toFixed(4)}, ${server.geo.lng.toFixed(4)}`
-                  : `~${server.geo.lat.toFixed(1)}, ${server.geo.lng.toFixed(1)} (APPROX)`
+                  : `~${Math.round(server.geo.lat)}, ${Math.round(server.geo.lng)} (APPROX)`
                 }
-                tooltip={isCurrentUser ? undefined : "Approximate location for privacy"}
+                tooltip={isCurrentUser ? undefined : "Approximate location for privacy (~100km)"}
                 warning={isCurrentUser}
               />
               <InfoRow label="Timezone" value={server.geo.timezone} />

@@ -99,9 +99,9 @@ function redactVisitorInfo(visitor: VisitorInfo): VisitorInfo {
       geo: visitor.server.geo ? {
         ...visitor.server.geo,
         city: '••••••',
-        // Round to 1 decimal place for rough location (still works for globe pin)
-        lat: Math.round(visitor.server.geo.lat * 10) / 10,
-        lng: Math.round(visitor.server.geo.lng * 10) / 10,
+        // Round to whole number for privacy (~111km accuracy, still works for globe pin)
+        lat: Math.round(visitor.server.geo.lat),
+        lng: Math.round(visitor.server.geo.lng),
         isp: '••••••',
         org: '••••••',
       } : null,
