@@ -68,8 +68,8 @@ async function getRedis(): Promise<RedisClientType | null> {
   }
 }
 
-// Cache TTL: 24 hours (profile doesn't change often)
-const CACHE_TTL = 60 * 60 * 24;
+// Cache TTL: 1 year (profile doesn't change, save AI costs)
+const CACHE_TTL = 60 * 60 * 24 * 365;
 
 // Rate limiting: max 2 AI requests per minute globally
 const RATE_LIMIT_WINDOW = 60; // seconds
