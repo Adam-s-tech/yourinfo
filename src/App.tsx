@@ -82,7 +82,7 @@ export default function App() {
       <footer className="app-footer">
         <p>
           This site demonstrates what information websites can collect about you.
-          <a href="https://github.com/hsingh/yourinfo" target="_blank" rel="noopener noreferrer">
+          <a href="https://github.com/siinghd/yourinfo" target="_blank" rel="noopener noreferrer">
             View on GitHub
           </a>
         </p>
