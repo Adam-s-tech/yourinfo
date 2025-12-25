@@ -2,6 +2,16 @@
  * Shared TypeScript types for YourInfo
  */
 
+// Import fingerprint types from utils modules
+export type { WasmFingerprint } from '../utils/wasmFingerprint';
+export type { WebGPUFingerprint } from '../utils/webgpuFingerprint';
+export type { ChromeAIStatus } from '../utils/chromeAI';
+
+// Re-import for use in ClientInfo interface
+import type { WasmFingerprint } from '../utils/wasmFingerprint';
+import type { WebGPUFingerprint } from '../utils/webgpuFingerprint';
+import type { ChromeAIStatus } from '../utils/chromeAI';
+
 /** Geographic coordinates */
 export interface GeoLocation {
   lat: number;
@@ -250,6 +260,11 @@ export interface ClientInfo {
 
   // User Profile Inference (the creepy stuff)
   userProfile: UserProfile;
+
+  // New fingerprint modules
+  wasmFingerprint?: WasmFingerprint;
+  webgpuFingerprint?: WebGPUFingerprint;
+  chromeAIStatus?: ChromeAIStatus;
 }
 
 /** Inferred user profile - what companies guess about you */

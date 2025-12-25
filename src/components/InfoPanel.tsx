@@ -191,14 +191,6 @@ export function InfoPanel({ visitor, isCurrentUser, onClose, aiLoading }: InfoPa
         {/* User Profile - What advertisers think about you */}
         {client && (
           <InfoSection title={client.userProfile.aiGenerated ? "AI Analysis of You" : "What Advertisers Know About You"} icon="$">
-            {client.userProfile.aiGenerated && (
-              <InfoRow
-                label="Profile Source"
-                value="AI Generated"
-                tooltip="Analyzed by Google Gemini AI"
-                warning
-              />
-            )}
             <InfoRow
               label="Human Score"
               value={`${client.userProfile.humanScore}%`}
@@ -900,6 +892,252 @@ export function InfoPanel({ visitor, isCurrentUser, onClose, aiLoading }: InfoPa
             <InfoRow label="Navigator Props" value={client.navigatorPropsCount} tooltip="Number of navigator properties" />
             <InfoRow label="Window Props" value={client.windowPropsCount} tooltip="Number of window properties" />
             <InfoRow label="Max Downlink" value={client.downlinkMax ? `${client.downlinkMax} Mbps` : 'N/A'} />
+          </InfoSection>
+        )}
+
+        {/* WASM Fingerprint */}
+        {client?.wasmFingerprint && (
+          <InfoSection title="WebAssembly Fingerprint" icon="W">
+            <InfoRow
+              label="WASM Support"
+              value={client.wasmFingerprint.supported ? 'Supported' : 'Not Supported'}
+              tooltip="WebAssembly support in this browser"
+            />
+            {client.wasmFingerprint.supported && (
+              <>
+                <InfoRow
+                  label="Features"
+                  value={[
+                    client.wasmFingerprint.features.simd && 'SIMD',
+                    client.wasmFingerprint.features.threads && 'Threads',
+                    client.wasmFingerprint.features.exceptions && 'Exceptions',
+                    client.wasmFingerprint.features.gc && 'GC',
+                    client.wasmFingerprint.features.tailCall && 'Tail Call',
+                    client.wasmFingerprint.features.relaxedSimd && 'Relaxed SIMD',
+                    client.wasmFingerprint.features.referenceTypes && 'Ref Types',
+                    client.wasmFingerprint.features.bulkMemory && 'Bulk Memory',
+                  ].filter(Boolean).join(', ') || 'Basic only'}
+                  tooltip="Detected WASM features"
+                />
+                {client.wasmFingerprint.timing && (
+                  <>
+                    <InfoRow
+                      label="Call Latency"
+                      value={`${client.wasmFingerprint.timing.callLatencyMicros.toFixed(2)} us`}
+                      tooltip="JS-to-WASM call latency"
+                    />
+                    <InfoRow
+                      label="Memory Access"
+                      value={`${client.wasmFingerprint.timing.memoryAccessMicros.toFixed(2)} us`}
+                      tooltip="WASM memory access timing"
+                    />
+                    <InfoRow
+                      label="Compilation Time"
+                      value={`${client.wasmFingerprint.timing.compilationTimeMs.toFixed(2)} ms`}
+                      tooltip="WASM module compilation time"
+                    />
+                  </>
+                )}
+                {client.wasmFingerprint.benchmark && (
+                  <>
+                    <InfoRow
+                      label="CPU Tier"
+                      value={`Tier ${client.wasmFingerprint.benchmark.cpuTier}/5`}
+                      tooltip="Estimated CPU performance tier"
+                      warning={client.wasmFingerprint.benchmark.cpuTier <= 2}
+                    />
+                    <InfoRow
+                      label="Int Ops/ms"
+                      value={client.wasmFingerprint.benchmark.intOpsPerMs.toLocaleString()}
+                      tooltip="Integer operations per millisecond"
+                    />
+                    <InfoRow
+                      label="Float Ops/ms"
+                      value={client.wasmFingerprint.benchmark.floatOpsPerMs.toLocaleString()}
+                      tooltip="Floating point operations per millisecond"
+                    />
+                    <InfoRow
+                      label="Memory Throughput"
+                      value={`${client.wasmFingerprint.benchmark.memoryThroughputMBps.toFixed(1)} MB/s`}
+                      tooltip="WASM memory throughput"
+                    />
+                  </>
+                )}
+                {client.wasmFingerprint.memoryLimits && (
+                  <InfoRow
+                    label="Max Memory"
+                    value={`${Math.round(client.wasmFingerprint.memoryLimits.maxPages * 64 / 1024)} MB`}
+                    tooltip="Maximum WASM memory allocation"
+                  />
+                )}
+                <InfoRow
+                  label="WASM Hash"
+                  value={client.wasmFingerprint.fingerprintHash}
+                  tooltip="Unique WASM fingerprint hash"
+                  warning
+                />
+                <InfoRow
+                  label="Confidence"
+                  value={`${client.wasmFingerprint.confidence}%`}
+                  tooltip="Fingerprint reliability score"
+                />
+              </>
+            )}
+          </InfoSection>
+        )}
+
+        {/* WebGPU Fingerprint */}
+        {client?.webgpuFingerprint && (
+          <InfoSection title="WebGPU Fingerprint" icon="G">
+            <InfoRow
+              label="WebGPU"
+              value={client.webgpuFingerprint.available ? 'Available' : 'Not Available'}
+              tooltip="WebGPU API availability"
+            />
+            {client.webgpuFingerprint.available && client.webgpuFingerprint.adapterInfo && (
+              <>
+                <InfoRow
+                  label="GPU Vendor"
+                  value={client.webgpuFingerprint.adapterInfo.vendor}
+                  tooltip="GPU vendor from WebGPU"
+                />
+                <InfoRow
+                  label="Architecture"
+                  value={client.webgpuFingerprint.adapterInfo.architecture}
+                  tooltip="GPU architecture"
+                />
+                <InfoRow
+                  label="Device"
+                  value={client.webgpuFingerprint.adapterInfo.device}
+                  tooltip="GPU device identifier"
+                />
+                {client.webgpuFingerprint.adapterInfo.description && client.webgpuFingerprint.adapterInfo.description !== 'unknown' && (
+                  <InfoRow
+                    label="Description"
+                    value={client.webgpuFingerprint.adapterInfo.description.substring(0, 50) + (client.webgpuFingerprint.adapterInfo.description.length > 50 ? '...' : '')}
+                    tooltip={client.webgpuFingerprint.adapterInfo.description}
+                  />
+                )}
+                <InfoRow
+                  label="Fallback Adapter"
+                  value={client.webgpuFingerprint.adapterInfo.isFallbackAdapter}
+                  tooltip="Using software fallback"
+                  warning={client.webgpuFingerprint.adapterInfo.isFallbackAdapter}
+                />
+              </>
+            )}
+            {client.webgpuFingerprint.available && (
+              <>
+                <InfoRow
+                  label="Feature Count"
+                  value={client.webgpuFingerprint.features.length}
+                  tooltip="Number of supported WebGPU features"
+                />
+                {client.webgpuFingerprint.features.length > 0 && (
+                  <InfoRow
+                    label="Key Features"
+                    value={client.webgpuFingerprint.features.slice(0, 5).join(', ') + (client.webgpuFingerprint.features.length > 5 ? '...' : '')}
+                    tooltip={client.webgpuFingerprint.features.join(', ')}
+                  />
+                )}
+                {client.webgpuFingerprint.preferredCanvasFormat && (
+                  <InfoRow
+                    label="Canvas Format"
+                    value={client.webgpuFingerprint.preferredCanvasFormat}
+                    tooltip="Preferred canvas format for this GPU"
+                  />
+                )}
+                {client.webgpuFingerprint.computeTimingFingerprint && (
+                  <>
+                    <InfoRow
+                      label="Compute Timing"
+                      value={`${client.webgpuFingerprint.computeTimingFingerprint.avgExecutionTime.toFixed(2)} ms`}
+                      tooltip="Average compute shader execution time"
+                    />
+                    <InfoRow
+                      label="Timing Pattern"
+                      value={client.webgpuFingerprint.computeTimingFingerprint.patternHash}
+                      tooltip="GPU scheduling pattern hash - unique to GPU model"
+                      warning
+                    />
+                  </>
+                )}
+                <InfoRow
+                  label="WebGPU Hash"
+                  value={client.webgpuFingerprint.fingerprintHash}
+                  tooltip="Unique WebGPU fingerprint hash"
+                  warning
+                />
+              </>
+            )}
+          </InfoSection>
+        )}
+
+        {/* Chrome AI Status */}
+        {client?.chromeAIStatus && (
+          <InfoSection title="Chrome Built-in AI" icon="A">
+            <InfoRow
+              label="Chrome AI"
+              value={client.chromeAIStatus.chromeAISupported ? 'Supported' : 'Not Supported'}
+              tooltip="Chrome's built-in Gemini Nano AI"
+            />
+            <InfoRow
+              label="Browser"
+              value={client.chromeAIStatus.browser.isChrome ? `Chrome ${client.chromeAIStatus.browser.version}` : 'Not Chrome'}
+              tooltip="Chrome browser detection"
+            />
+            <InfoRow
+              label="Min Version Met"
+              value={client.chromeAIStatus.browser.meetsMinimumVersion}
+              tooltip="Meets Chrome 127+ requirement"
+            />
+            {client.chromeAIStatus.apis.languageModel.supported && (
+              <InfoRow
+                label="Language Model"
+                value={client.chromeAIStatus.apis.languageModel.available === 'readily' ? 'Ready' :
+                       client.chromeAIStatus.apis.languageModel.available === 'after-download' ? 'Needs Download' :
+                       client.chromeAIStatus.apis.languageModel.available === 'no' ? 'Unavailable' : 'Not Supported'}
+                tooltip="Gemini Nano language model API"
+                warning={client.chromeAIStatus.apis.languageModel.available === 'readily'}
+              />
+            )}
+            {client.chromeAIStatus.apis.summarizer.supported && (
+              <InfoRow
+                label="Summarizer"
+                value={client.chromeAIStatus.apis.summarizer.available === 'readily' ? 'Ready' :
+                       client.chromeAIStatus.apis.summarizer.available === 'after-download' ? 'Needs Download' :
+                       client.chromeAIStatus.apis.summarizer.available === 'no' ? 'Unavailable' : 'Not Supported'}
+                tooltip="AI summarization API"
+              />
+            )}
+            {client.chromeAIStatus.apis.translator.supported && (
+              <InfoRow
+                label="Translator"
+                value={client.chromeAIStatus.apis.translator.available === 'readily' ? 'Ready' :
+                       client.chromeAIStatus.apis.translator.available === 'after-download' ? 'Needs Download' :
+                       client.chromeAIStatus.apis.translator.available === 'no' ? 'Unavailable' : 'Not Supported'}
+                tooltip="AI translation API"
+              />
+            )}
+            {client.chromeAIStatus.apis.languageDetector.supported && (
+              <InfoRow
+                label="Language Detector"
+                value={client.chromeAIStatus.apis.languageDetector.available === 'readily' ? 'Ready' :
+                       client.chromeAIStatus.apis.languageDetector.available === 'after-download' ? 'Needs Download' :
+                       client.chromeAIStatus.apis.languageDetector.available === 'no' ? 'Unavailable' : 'Not Supported'}
+                tooltip="AI language detection API"
+              />
+            )}
+            {!client.chromeAIStatus.apis.languageModel.supported &&
+             !client.chromeAIStatus.apis.summarizer.supported &&
+             !client.chromeAIStatus.apis.translator.supported &&
+             !client.chromeAIStatus.apis.languageDetector.supported && (
+              <InfoRow
+                label="APIs"
+                value="None detected"
+                tooltip="No Chrome AI APIs detected"
+              />
+            )}
           </InfoSection>
         )}
 

@@ -15,6 +15,7 @@ import type {
 import { collectClientInfo } from '../utils/fingerprint';
 import { behaviorTracker } from '../utils/behavior';
 import { advancedBehaviorTracker } from '../utils/advanced';
+import { profileWithChromeAI, isChromeAIAvailable } from '../utils/chromeAI';
 import type { AdvancedBehavior } from '../types';
 
 /** Get API URL based on environment */
@@ -53,6 +54,9 @@ async function fetchAIProfile(clientInfo: ClientInfo): Promise<{
   }
 }
 
+/** AI source types */
+export type AISource = 'grok' | 'mimo' | 'chrome-gemini-nano' | 'fallback' | null;
+
 interface UseWebSocketResult {
   connected: boolean;
   visitors: VisitorInfo[];
@@ -61,6 +65,7 @@ interface UseWebSocketResult {
   aiLoading: boolean;
   aiCreditsExhausted: boolean;
   totalUniqueVisitors: number;
+  aiSource: AISource;
 }
 
 /** Get WebSocket URL based on environment */
@@ -83,6 +88,7 @@ export function useWebSocket(): UseWebSocketResult {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiCreditsExhausted, setAiCreditsExhausted] = useState(false);
   const [totalUniqueVisitors, setTotalUniqueVisitors] = useState(0);
+  const [aiSource, setAiSource] = useState<AISource>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -153,29 +159,101 @@ export function useWebSocket(): UseWebSocketResult {
           // Fetch AI profile in background (don't block connection)
           console.log('Fetching AI profile in background...');
           setAiLoading(true);
-          fetchAIProfile(clientInfo).then((aiResult) => {
-            setAiLoading(false);
-            if (aiResult.profile) {
+
+          // Helper to send updated client info
+          const sendClientInfo = () => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: 'client_info',
+                  payload: { clientInfo },
+                })
+              );
+            }
+          };
+
+          // Helper to try Chrome AI fallback
+          const tryChromeAIFallback = async (): Promise<boolean> => {
+            console.log('Checking Chrome AI availability for fallback...');
+            const chromeAIStatus = await isChromeAIAvailable();
+
+            if (chromeAIStatus.chromeAISupported &&
+                chromeAIStatus.apis.languageModel.available === 'readily') {
+              console.log('Chrome AI available, attempting local profiling...');
+              const chromeProfile = await profileWithChromeAI(clientInfo);
+
+              if (chromeProfile) {
+                console.log('Chrome AI profile generated successfully');
+                // Merge Chrome AI profile data into userProfile
+                clientInfo.userProfile = {
+                  ...clientInfo.userProfile,
+                  aiGenerated: true,
+                  developerScore: chromeProfile.developerScore,
+                  developerReason: chromeProfile.developerReason,
+                  gamerScore: chromeProfile.gamerScore,
+                  gamerReason: chromeProfile.gamerReason,
+                  designerScore: chromeProfile.designerScore,
+                  designerReason: chromeProfile.designerReason,
+                  deviceTier: chromeProfile.deviceTier,
+                  likelyDeveloper: chromeProfile.developerScore > 60,
+                  likelyGamer: chromeProfile.gamerScore > 60,
+                  likelyDesigner: chromeProfile.designerScore > 60,
+                };
+                setAiSource('chrome-gemini-nano');
+                setAiCreditsExhausted(false);
+                sendClientInfo();
+                return true;
+              }
+            }
+            return false;
+          };
+
+          fetchAIProfile(clientInfo).then(async (aiResult) => {
+            // If server returned real AI profile (not fallback), use it
+            if (aiResult.profile && aiResult.source !== 'fallback') {
               console.log(`AI profile loaded (source: ${aiResult.source})`);
               setAiCreditsExhausted(false);
-              clientInfo.userProfile = aiResult.profile;
-              // Send updated client info with AI profile
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(
-                  JSON.stringify({
-                    type: 'client_info',
-                    payload: { clientInfo },
-                  })
-                );
+              // Check if profile came from MiMo or Grok
+              const profileAiSource = (aiResult.profile as any).aiSource;
+              if (profileAiSource === 'mimo') {
+                setAiSource('mimo');
+              } else {
+                setAiSource('grok');
               }
+              clientInfo.userProfile = aiResult.profile;
+              sendClientInfo();
+              setAiLoading(false);
             } else {
-              console.log('Using local fallback profile - AI credits exhausted');
-              setAiCreditsExhausted(true);
+              // Server returned fallback or empty - try Chrome AI first
+              console.log('Server AI unavailable, trying Chrome AI fallback...');
+              const chromeSuccess = await tryChromeAIFallback();
+
+              if (!chromeSuccess) {
+                // Chrome AI not available, use server's rule-based fallback if we have it
+                if (aiResult.profile) {
+                  console.log('Using server rule-based fallback profile');
+                  clientInfo.userProfile = aiResult.profile;
+                  sendClientInfo();
+                  setAiSource('fallback');
+                } else {
+                  console.log('No AI available');
+                  setAiCreditsExhausted(true);
+                  setAiSource('fallback');
+                }
+              }
+              setAiLoading(false);
             }
-          }).catch((err) => {
+          }).catch(async (err) => {
             console.error('AI profile error:', err);
+
+            // Try Chrome AI fallback on error
+            const chromeSuccess = await tryChromeAIFallback();
+
+            if (!chromeSuccess) {
+              setAiCreditsExhausted(true);
+              setAiSource('fallback');
+            }
             setAiLoading(false);
-            setAiCreditsExhausted(true);
           });
 
           // Update behavior data every second
@@ -291,5 +369,6 @@ export function useWebSocket(): UseWebSocketResult {
     aiLoading,
     aiCreditsExhausted,
     totalUniqueVisitors,
+    aiSource,
   };
 }

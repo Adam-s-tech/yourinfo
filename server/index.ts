@@ -290,8 +290,41 @@ const server = Bun.serve({
       return new Response('WebSocket upgrade failed', { status: 400 });
     }
 
-    // Handle Hono routes
-    return app.fetch(req);
+    // Handle Hono routes (API, health, etc.)
+    if (url.pathname.startsWith('/api') || url.pathname === '/health') {
+      return app.fetch(req);
+    }
+
+    // Serve static files from dist folder
+    const distPath = import.meta.dir + '/../dist';
+    let filePath = url.pathname === '/' ? '/index.html' : url.pathname;
+    let file = Bun.file(distPath + filePath);
+
+    // Check if file exists, if not serve index.html for SPA routing
+    if (!file.size) {
+      file = Bun.file(distPath + '/index.html');
+    }
+
+    // Set content type
+    const ext = filePath.split('.').pop() || '';
+    const contentTypes: Record<string, string> = {
+      'html': 'text/html',
+      'js': 'application/javascript',
+      'css': 'text/css',
+      'svg': 'image/svg+xml',
+      'json': 'application/json',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'ico': 'image/x-icon',
+      'woff': 'font/woff',
+      'woff2': 'font/woff2',
+    };
+
+    return new Response(file, {
+      headers: {
+        'Content-Type': contentTypes[ext] || 'application/octet-stream',
+      },
+    });
   },
 
   websocket: {

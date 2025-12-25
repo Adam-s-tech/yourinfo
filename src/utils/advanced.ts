@@ -630,9 +630,9 @@ class AdvancedBehaviorTracker {
     this.state.lastActivityTime = now;
   };
 
-  private calculateHandedness(): { hand: 'left' | 'right' | 'unknown'; confidence: number } {
+  private calculateHandedness(): { hand: 'left' | 'right' | 'unknown'; confidence: number; warning?: string } {
     if (this.state.mousePositions.length < 50) {
-      return { hand: 'unknown', confidence: 0 };
+      return { hand: 'unknown', confidence: 0, warning: 'Insufficient mouse data for reliable handedness detection' };
     }
 
     // Analyze mouse movement patterns
@@ -655,13 +655,16 @@ class AdvancedBehaviorTracker {
     const rightRatio = rightSideCount / positions.length;
     const leftRatio = leftSideCount / positions.length;
 
+    // Note: Mouse position heuristics have low accuracy - website layout heavily influences cursor position
+    const warning = 'Low confidence: mouse position is heavily influenced by UI layout, not handedness';
+
     if (rightRatio > 0.6) {
-      return { hand: 'right', confidence: Math.round(rightRatio * 100) };
+      return { hand: 'right', confidence: Math.round(rightRatio * 100), warning };
     } else if (leftRatio > 0.6) {
-      return { hand: 'left', confidence: Math.round(leftRatio * 100) };
+      return { hand: 'left', confidence: Math.round(leftRatio * 100), warning };
     }
 
-    return { hand: 'unknown', confidence: 50 };
+    return { hand: 'unknown', confidence: 50, warning };
   }
 
   private calculateEngagement(): number {
@@ -872,169 +875,485 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
   // Parse GPU info
   const gpu = parseGPU(clientInfo.webglRenderer);
 
+  // Common hardware values used across multiple detections
+  const ram = clientInfo.deviceMemory || 0;
+
   // ============ DEVELOPER DETECTION ============
-  // DevTools open is strongest signal
+  // Scoring weights: definitive signals (40-60), strong signals (20-35), moderate signals (10-20), weak signals (5-10)
+  const developerSignals: string[] = [];
+
+  // TIER 1: Definitive signals (very high confidence)
+  // DevTools open is one of the strongest signals - only developers typically have these open
   if (clientInfo.advancedBehavior?.devToolsOpen) {
-    developerScore += 50;
-    developerReason = 'DevTools open';
+    developerScore += 55;
+    developerSignals.push('DevTools open');
   }
 
-  // Dev extensions are definitive
-  if (clientInfo.extensionsDetected?.includes('React DevTools')) {
-    developerScore += 40;
-    developerReason = developerReason || 'React DevTools installed';
-    inferredInterests.push('React Development');
-  }
-  if (clientInfo.extensionsDetected?.includes('Vue DevTools')) {
-    developerScore += 40;
-    developerReason = developerReason || 'Vue DevTools installed';
-    inferredInterests.push('Vue Development');
-  }
-  if (clientInfo.extensionsDetected?.includes('Redux DevTools')) {
-    developerScore += 35;
-    developerReason = developerReason || 'Redux DevTools installed';
-  }
-
-  // Coding fonts are strong signals
-  const codingFonts = ['Fira Code', 'JetBrains Mono', 'Source Code Pro', 'Cascadia Code', 'Monaco', 'Menlo', 'Consolas', 'Ubuntu Mono', 'Hack', 'Inconsolata'];
-  const foundCodingFonts = clientInfo.fontsDetected?.filter(f => codingFonts.includes(f)) || [];
-  if (foundCodingFonts.length > 0) {
-    developerScore += 15 + (foundCodingFonts.length * 5);
-    developerReason = developerReason || `Coding fonts: ${foundCodingFonts.join(', ')}`;
+  // Dev extensions are nearly definitive - require installation and conscious choice
+  const devExtensions = [
+    { name: 'React DevTools', score: 45, interest: 'React Development' },
+    { name: 'Vue DevTools', score: 45, interest: 'Vue Development' },
+    { name: 'Redux DevTools', score: 40, interest: 'State Management' },
+    { name: 'Angular DevTools', score: 45, interest: 'Angular Development' },
+    { name: 'Svelte DevTools', score: 45, interest: 'Svelte Development' },
+  ];
+  for (const ext of devExtensions) {
+    if (clientInfo.extensionsDetected?.includes(ext.name)) {
+      developerScore += ext.score;
+      developerSignals.push(ext.name);
+      inferredInterests.push(ext.interest);
+    }
   }
 
-  // GitHub login
+  // TIER 2: Strong signals (high confidence)
+  // GitHub login - strong indicator of developer activity
   if (clientInfo.socialLogins?.github) {
-    developerScore += 30;
-    developerReason = developerReason || 'GitHub logged in';
+    developerScore += 35;
+    developerSignals.push('GitHub logged in');
     inferredInterests.push('Open Source');
   }
 
-  // High-end hardware common for devs
-  if ((clientInfo.hardwareConcurrency || 0) >= 8 && (clientInfo.deviceMemory || 0) >= 8) {
-    developerScore += 10;
+  // Coding fonts - intentionally installed, strong signal
+  // Weighted by specificity: specialized coding fonts > common monospace
+  const specializedCodingFonts = ['Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Hack', 'Inconsolata', 'Source Code Pro', 'Ubuntu Mono', 'Dank Mono', 'Operator Mono', 'MonoLisa', 'Iosevka', 'Victor Mono'];
+  const commonMonoFonts = ['Monaco', 'Menlo', 'Consolas', 'Courier New'];
+  const foundSpecializedFonts = clientInfo.fontsDetected?.filter(f => specializedCodingFonts.includes(f)) || [];
+  const foundCommonMonoFonts = clientInfo.fontsDetected?.filter(f => commonMonoFonts.includes(f)) || [];
+
+  if (foundSpecializedFonts.length > 0) {
+    // Specialized coding fonts are strong indicators (user went out of way to install)
+    developerScore += 25 + Math.min(foundSpecializedFonts.length * 8, 24); // Max 49
+    developerSignals.push(`Coding fonts: ${foundSpecializedFonts.slice(0, 3).join(', ')}`);
+  } else if (foundCommonMonoFonts.length >= 2) {
+    // Multiple common mono fonts is weaker signal (may come with OS)
+    developerScore += 8;
+    developerSignals.push('Multiple monospace fonts');
   }
 
-  // Keyboard shortcuts (dev-specific)
-  const devShortcuts = ['Cmd+SHIFT+I', 'Ctrl+SHIFT+I', 'Cmd+SHIFT+J', 'Ctrl+SHIFT+J', 'Cmd+SHIFT+C', 'Ctrl+SHIFT+C', 'F12'];
-  if (clientInfo.advancedBehavior?.keyboardShortcutsUsed?.some(k => devShortcuts.some(d => k.includes(d.replace('Cmd+', '').replace('Ctrl+', ''))))) {
-    developerScore += 20;
+  // DevTools keyboard shortcuts used - strong behavioral signal
+  const devShortcuts = ['SHIFT+I', 'SHIFT+J', 'SHIFT+C', 'SHIFT+K', 'SHIFT+M']; // DevTools, console, elements, network, device
+  const usedDevShortcuts = clientInfo.advancedBehavior?.keyboardShortcutsUsed?.filter(
+    k => devShortcuts.some(d => k.toUpperCase().includes(d))
+  ) || [];
+  if (usedDevShortcuts.length > 0) {
+    developerScore += 25 + Math.min(usedDevShortcuts.length * 5, 15); // 25-40
+    developerSignals.push('DevTools shortcuts');
   }
+
+  // TIER 3: Moderate signals (medium confidence, need corroboration)
+  // High-end hardware - common but not exclusive to devs
+  const devCores = clientInfo.hardwareConcurrency || 0;
+  const devRam = clientInfo.deviceMemory || 0;
+  if (devCores >= 12 && devRam >= 8) {
+    developerScore += 12;
+  } else if (devCores >= 8 && devRam >= 8) {
+    developerScore += 8;
+  }
+
+  // Linux platform - higher developer prevalence
+  if (clientInfo.platform?.toLowerCase().includes('linux')) {
+    developerScore += 18;
+    developerSignals.push('Linux platform');
+  }
+
+  // Many browser tabs/history (power usage pattern)
+  if ((clientInfo.historyLength || 0) >= 50) {
+    developerScore += 6;
+  }
+
+  // TIER 4: Weak/supporting signals (low confidence alone)
+  // Touch typing speed indicators - fast copy/paste patterns
+  const copyPasteRatio = (clientInfo.advancedBehavior?.copyCount || 0) + (clientInfo.advancedBehavior?.pasteCount || 0);
+  if (copyPasteRatio >= 5) {
+    developerScore += 5; // Frequent copy/paste suggests coding workflow
+  }
+
+  // Right-click menu usage (inspect element access)
+  if ((clientInfo.advancedBehavior?.rightClickCount || 0) >= 3) {
+    developerScore += 4;
+  }
+
+  // Wide screen resolution (common for dev workstations)
+  if ((clientInfo.screenWidth || 0) >= 2560 && (clientInfo.devicePixelRatio || 1) >= 1) {
+    developerScore += 6;
+  }
+
+  // Ultrawide aspect ratio (very common for developers)
+  const aspectRatio = (clientInfo.screenWidth || 1920) / (clientInfo.screenHeight || 1080);
+  if (aspectRatio >= 2.3) { // 21:9 or wider
+    developerScore += 10;
+    developerSignals.push('Ultrawide display');
+  }
+
+  // Set developer reason from strongest signal
+  developerReason = developerSignals[0] || '';
 
   // ============ GAMER DETECTION ============
-  // High-end discrete GPU is strongest signal
+  // Scoring weights: definitive signals (40-60), strong signals (25-40), moderate signals (10-25), weak signals (5-10)
+  const gamerSignals: string[] = [];
+
+  // TIER 1: Definitive signals (very high confidence)
+  // Gaming-grade discrete GPU is the strongest signal
+  // Enthusiast GPUs (RTX 4090, 4080, 3090, RX 7900) are almost exclusively for gaming/3D work
   if (gpu.tier === 'enthusiast') {
-    gamerScore += 50;
-    gamerReason = `${gpu.model} (enthusiast GPU)`;
+    gamerScore += 55;
+    gamerSignals.push(`${gpu.model} (enthusiast GPU)`);
     inferredInterests.push('PC Gaming');
   } else if (gpu.tier === 'high') {
-    gamerScore += 35;
-    gamerReason = `${gpu.model} (high-end GPU)`;
+    // High-end GPUs (RTX 4070, 3080, 3070) - still strong gaming signal
+    gamerScore += 40;
+    gamerSignals.push(`${gpu.model} (high-end GPU)`);
     inferredInterests.push('PC Gaming');
   } else if (gpu.tier === 'mid' && gpu.brand !== 'Apple') {
-    gamerScore += 20;
-    gamerReason = gamerReason || `${gpu.model}`;
+    // Mid-range discrete GPUs - moderate gaming signal (could be casual/entry gamer)
+    // Exclude Intel UHD as it's integrated
+    if (!gpu.model.includes('Intel') && !gpu.model.includes('UHD') && !gpu.model.includes('Iris')) {
+      gamerScore += 22;
+      gamerSignals.push(`${gpu.model} (discrete GPU)`);
+    }
   }
 
-  // Gamepad connected
+  // TIER 2: Strong signals (high confidence)
+  // Gamepad connected - definitive gaming signal
   if (clientInfo.gamepadsSupported) {
     try {
       const gamepads = navigator.getGamepads?.();
-      if (gamepads?.some(g => g !== null)) {
-        gamerScore += 40;
-        gamerReason = gamerReason || 'Gamepad connected';
+      const connectedGamepads = gamepads ? Array.from(gamepads).filter(g => g !== null) : [];
+      if (connectedGamepads.length > 0) {
+        gamerScore += 50; // Very strong signal
+        gamerSignals.push('Gamepad connected');
         inferredInterests.push('Console Gaming');
+        // Multiple gamepads suggests serious gamer (local multiplayer)
+        if (connectedGamepads.length > 1) {
+          gamerScore += 10;
+          gamerSignals.push('Multiple gamepads');
+        }
       }
-    } catch {}
+    } catch {
+      // Gamepad API blocked or unavailable
+    }
   }
 
-  // High refresh rate / gaming resolution
-  if ((clientInfo.screenWidth || 0) >= 2560 && (clientInfo.screenHeight || 0) >= 1440) {
+  // High refresh rate detection (if available) - strong gaming signal
+  // Most gaming monitors are 120Hz+, regular monitors are 60Hz
+  // Note: This requires the Screen API extension which may not be available
+  const screenRefreshRate = (clientInfo as Record<string, unknown>).screenRefreshRate as number | undefined;
+  if (screenRefreshRate) {
+    if (screenRefreshRate >= 240) {
+      gamerScore += 40;
+      gamerSignals.push(`${screenRefreshRate}Hz display (competitive gaming)`);
+    } else if (screenRefreshRate >= 144) {
+      gamerScore += 30;
+      gamerSignals.push(`${screenRefreshRate}Hz display (gaming monitor)`);
+    } else if (screenRefreshRate >= 120) {
+      gamerScore += 20;
+      gamerSignals.push(`${screenRefreshRate}Hz display`);
+    }
+  }
+
+  // TIER 3: Moderate signals (need corroboration)
+  // Gaming-oriented screen resolutions
+  const screenWidth = clientInfo.screenWidth || 0;
+  const screenHeight = clientInfo.screenHeight || 0;
+
+  // 1440p is the sweet spot for gaming - common gaming resolution
+  if (screenWidth >= 2560 && screenHeight >= 1440 && screenHeight < 2160) {
+    gamerScore += 18;
+    gamerSignals.push('1440p display (gaming sweet spot)');
+  }
+  // 4K gaming
+  if (screenWidth >= 3840 && screenHeight >= 2160) {
+    gamerScore += 12; // Less common for gaming due to performance requirements
+    gamerSignals.push('4K display');
+  }
+  // Ultrawide gaming (21:9 aspect ratio)
+  const gamerAspectRatio = screenWidth / (screenHeight || 1);
+  if (gamerAspectRatio >= 2.3 && gamerAspectRatio < 2.5) {
     gamerScore += 15;
-    gamerReason = gamerReason || '1440p+ display';
+    gamerSignals.push('Ultrawide display (21:9)');
   }
-  if ((clientInfo.screenWidth || 0) >= 3840) {
-    gamerScore += 10; // 4K
+  // Super ultrawide (32:9 - Samsung Odyssey style)
+  if (gamerAspectRatio >= 3.5) {
+    gamerScore += 25;
+    gamerSignals.push('Super ultrawide display (32:9)');
+    inferredInterests.push('Immersive Gaming');
   }
 
-  // HDR support
+  // HDR support - gaming monitors often have HDR
   if (clientInfo.hdrSupported) {
-    gamerScore += 10;
+    gamerScore += 12;
+    gamerSignals.push('HDR display');
   }
 
-  // Many CPU cores (gaming rigs)
-  if ((clientInfo.hardwareConcurrency || 0) >= 16) {
-    gamerScore += 15;
-  } else if ((clientInfo.hardwareConcurrency || 0) >= 12) {
-    gamerScore += 10;
+  // High CPU core count (gaming rigs often have 8+ cores)
+  const cpuCores = clientInfo.hardwareConcurrency || 0;
+  if (cpuCores >= 16) {
+    gamerScore += 15; // High-end gaming/workstation
+  } else if (cpuCores >= 12) {
+    gamerScore += 12;
+  } else if (cpuCores >= 8) {
+    gamerScore += 8;
   }
+
+  // High RAM (gaming needs 16GB+, browser reports max 8GB but we can infer)
+  if (ram >= 8) {
+    gamerScore += 6; // At browser cap, likely has more
+  }
+
+  // TIER 4: Behavioral signals (weak but supportive)
+  // Fast mouse movement patterns could indicate gamer (higher DPI, faster reflexes)
+  // This would need to be measured in the behavior tracker - placeholder for future
+  const mouseSpeed = (clientInfo as Record<string, unknown>).avgMouseSpeed as number | undefined;
+  if (mouseSpeed && mouseSpeed > 1500) { // Pixels per second
+    gamerScore += 10;
+    gamerSignals.push('Fast mouse movement');
+  }
+
+  // Pointer lock API usage (common in FPS games)
+  if ((clientInfo as Record<string, unknown>).pointerLockUsed) {
+    gamerScore += 15;
+    gamerSignals.push('Pointer lock used');
+  }
+
+  // Set gamer reason from strongest signal
+  gamerReason = gamerSignals[0] || '';
 
   // ============ DESIGNER DETECTION ============
-  // Apple devices with P3 color gamut
-  if (gpu.brand === 'Apple') {
-    designerScore += 25;
-    designerReason = 'Apple device (common for designers)';
+  // Scoring weights: definitive signals (40-60), strong signals (25-40), moderate signals (10-25), weak signals (5-10)
+  const designerSignals: string[] = [];
+
+  // TIER 1: Definitive signals (very high confidence)
+  // Professional color displays (Rec.2020, DCI-P3 wide gamut) - designers need color accuracy
+  if (clientInfo.colorGamut === 'rec2020') {
+    designerScore += 50;
+    designerSignals.push('Rec.2020 professional display');
+    inferredInterests.push('Color-Critical Work');
+  } else if (clientInfo.colorGamut === 'p3') {
+    designerScore += 35;
+    designerSignals.push('P3 wide color gamut display');
     inferredInterests.push('Creative Work');
   }
 
-  // Wide color gamut display
-  if (clientInfo.colorGamut === 'p3') {
-    designerScore += 20;
-    designerReason = designerReason || 'P3 wide color gamut display';
-  } else if (clientInfo.colorGamut === 'rec2020') {
-    designerScore += 25;
-    designerReason = designerReason || 'Rec.2020 professional display';
+  // 10-bit or higher color depth - professional displays
+  const colorDepth = clientInfo.screenColorDepth || 0;
+  if (colorDepth >= 30) {
+    designerScore += 35;
+    designerSignals.push('10-bit+ color depth (professional display)');
+  } else if (colorDepth >= 24) {
+    designerScore += 5; // Standard 8-bit, common for everyone
   }
 
-  // High color depth
-  if ((clientInfo.screenColorDepth || 0) >= 30) {
+  // TIER 2: Strong signals (high confidence)
+  // Touch/stylus support combined with Apple or professional hardware
+  const touchPoints = clientInfo.maxTouchPoints || 0;
+  const hasMultiTouch = touchPoints > 1;
+
+  // Stylus/pen input detection (common for digital artists)
+  const pointerTypes = (clientInfo as Record<string, unknown>).pointerTypes as string[] | undefined;
+  if (pointerTypes && Array.isArray(pointerTypes) && pointerTypes.includes('pen')) {
+    designerScore += 45;
+    designerSignals.push('Stylus/pen input detected');
+    inferredInterests.push('Digital Art');
+  }
+
+  // Apple devices with Pro-level hardware - very common for designers
+  if (gpu.brand === 'Apple') {
+    if (gpu.model.includes('Pro') || gpu.model.includes('Max') || gpu.model.includes('Ultra')) {
+      designerScore += 35;
+      designerSignals.push(`Apple ${gpu.model} (pro creative hardware)`);
+      inferredInterests.push('Creative Professional');
+    } else {
+      designerScore += 18;
+      designerSignals.push('Apple device');
+    }
+  }
+
+  // High-end AMD/NVIDIA workstation GPUs (Quadro, FirePro, etc.)
+  const workstationGPU = clientInfo.webglRenderer?.toLowerCase() || '';
+  if (workstationGPU.includes('quadro') || workstationGPU.includes('firepro') || workstationGPU.includes('radeon pro')) {
+    designerScore += 45;
+    designerSignals.push('Professional workstation GPU');
+    inferredInterests.push('3D/CAD Work');
+  }
+
+  // TIER 3: Moderate signals (need corroboration)
+  // Retina/HiDPI display - designers prefer sharp displays
+  const pixelRatio = clientInfo.devicePixelRatio || 1;
+  if (pixelRatio >= 3) {
+    designerScore += 15; // Very high DPI (mobile or premium displays)
+    designerSignals.push('Very high DPI display');
+  } else if (pixelRatio >= 2) {
+    designerScore += 10; // Retina/HiDPI
+    designerSignals.push('HiDPI display');
+  }
+
+  // 4K+ resolution with high aspect ratio (designer workstation)
+  const designerScreenWidth = clientInfo.screenWidth || 0;
+  const designerScreenHeight = clientInfo.screenHeight || 0;
+  if (designerScreenWidth >= 3840 && designerScreenHeight >= 2160) {
     designerScore += 15;
-    designerReason = designerReason || '10-bit color depth';
+    designerSignals.push('4K+ display');
   }
 
-  // Retina/HiDPI display
-  if ((clientInfo.devicePixelRatio || 1) >= 2) {
+  // Professional design fonts - intentionally installed
+  // Tier these by specificity
+  const professionalDesignFonts = ['Proxima Nova', 'Gotham', 'Aktiv Grotesk', 'Circular', 'GT Walsheim', 'Graphik', 'Inter', 'DIN', 'Museo Sans', 'Brandon Grotesque'];
+  const commonDesignFonts = ['SF Pro', 'Helvetica Neue', 'Helvetica', 'Avenir', 'Futura', 'Gill Sans'];
+  const adobeFonts = ['Adobe Clean', 'Myriad Pro', 'Minion Pro', 'Source Sans Pro', 'Source Serif Pro'];
+
+  const foundProfessionalFonts = clientInfo.fontsDetected?.filter(f => professionalDesignFonts.includes(f)) || [];
+  const foundCommonDesignFonts = clientInfo.fontsDetected?.filter(f => commonDesignFonts.includes(f)) || [];
+  const foundAdobeFonts = clientInfo.fontsDetected?.filter(f => adobeFonts.includes(f)) || [];
+
+  if (foundProfessionalFonts.length > 0) {
+    designerScore += 25 + Math.min(foundProfessionalFonts.length * 5, 15);
+    designerSignals.push(`Professional fonts: ${foundProfessionalFonts.slice(0, 2).join(', ')}`);
+  }
+  if (foundAdobeFonts.length > 0) {
+    designerScore += 20;
+    designerSignals.push('Adobe fonts installed');
+    inferredInterests.push('Adobe Creative Suite');
+  }
+  if (foundCommonDesignFonts.length >= 3) {
     designerScore += 10;
+    designerSignals.push('Multiple design fonts');
   }
 
-  // Design fonts
-  const designFonts = ['SF Pro', 'Helvetica Neue', 'Helvetica', 'Avenir', 'Futura', 'Proxima Nova', 'Gotham'];
-  if (clientInfo.fontsDetected?.some(f => designFonts.includes(f))) {
-    designerScore += 10;
+  // TIER 4: Weak/supporting signals
+  // HDR support (good for visual work)
+  if (clientInfo.hdrSupported) {
+    designerScore += 8;
   }
+
+  // Touch-enabled non-mobile device (drawing tablet or touch display)
+  if (hasMultiTouch && !clientInfo.hardwareFamily?.includes('Phone') && !clientInfo.hardwareFamily?.includes('Tablet')) {
+    designerScore += 12;
+    designerSignals.push('Touch display (non-mobile)');
+  }
+
+  // High RAM (design apps are memory-hungry)
+  if (ram >= 8) {
+    designerScore += 5;
+  }
+
+  // macOS platform (industry standard for design)
+  if (clientInfo.platform?.toLowerCase().includes('mac')) {
+    designerScore += 8;
+  }
+
+  // Set designer reason from strongest signal
+  designerReason = designerSignals[0] || '';
 
   // ============ POWER USER DETECTION ============
-  // Many keyboard shortcuts
-  const shortcutsUsed = clientInfo.advancedBehavior?.keyboardShortcutsUsed?.length || 0;
-  if (shortcutsUsed >= 5) {
-    powerUserScore += 40;
-    powerUserReason = `Uses ${shortcutsUsed}+ keyboard shortcuts`;
-  } else if (shortcutsUsed >= 3) {
-    powerUserScore += 25;
-    powerUserReason = `Uses keyboard shortcuts`;
-  }
+  // Scoring weights: definitive signals (40-50), strong signals (25-40), moderate signals (10-25), weak signals (5-10)
+  const powerUserSignals: string[] = [];
 
-  // Multiple extensions
-  const extCount = clientInfo.extensionsDetected?.length || 0;
-  if (extCount >= 4) {
+  // TIER 1: Strong behavioral signals
+  // Keyboard shortcuts are a strong indicator - casual users rarely use them
+  const shortcutsUsed = clientInfo.advancedBehavior?.keyboardShortcutsUsed || [];
+  const shortcutCount = shortcutsUsed.length;
+
+  // Weight shortcuts by complexity
+  const advancedShortcuts = shortcutsUsed.filter(s =>
+    s.includes('SHIFT') || s.includes('ALT') || s.includes('OPT')
+  );
+
+  if (shortcutCount >= 5 || advancedShortcuts.length >= 3) {
+    powerUserScore += 45;
+    powerUserSignals.push(`Heavy keyboard shortcut user (${shortcutCount}+ shortcuts)`);
+  } else if (shortcutCount >= 3) {
     powerUserScore += 30;
-    powerUserReason = powerUserReason || `${extCount} browser extensions`;
-  } else if (extCount >= 2) {
+    powerUserSignals.push(`Uses keyboard shortcuts (${shortcutCount})`);
+  } else if (shortcutCount >= 1) {
     powerUserScore += 15;
+    powerUserSignals.push('Uses some keyboard shortcuts');
   }
 
-  // Long browser history
-  if ((clientInfo.historyLength || 0) >= 30) {
-    powerUserScore += 15;
-  } else if ((clientInfo.historyLength || 0) >= 15) {
+  // TIER 2: Configuration signals (intentional customization)
+  // Multiple browser extensions indicate active customization
+  const extCount = clientInfo.extensionsDetected?.length || 0;
+  if (extCount >= 6) {
+    powerUserScore += 35;
+    powerUserSignals.push(`${extCount} browser extensions (heavily customized)`);
+  } else if (extCount >= 4) {
+    powerUserScore += 25;
+    powerUserSignals.push(`${extCount} browser extensions`);
+  } else if (extCount >= 2) {
+    powerUserScore += 12;
+  }
+
+  // Specific power user extensions
+  const powerExtensions = ['uBlock Origin', 'LastPass', '1Password', 'Bitwarden', 'Dark Reader', 'Vimium', 'Tampermonkey', 'Greasemonkey'];
+  const foundPowerExtensions = clientInfo.extensionsDetected?.filter(e =>
+    powerExtensions.some(pe => e.toLowerCase().includes(pe.toLowerCase()))
+  ) || [];
+  if (foundPowerExtensions.length > 0) {
+    powerUserScore += 15 + Math.min(foundPowerExtensions.length * 5, 15);
+    powerUserSignals.push(`Power user extensions: ${foundPowerExtensions.slice(0, 2).join(', ')}`);
+  }
+
+  // TIER 3: Usage pattern signals
+  // Long session/history indicates power usage
+  const historyLength = clientInfo.historyLength || 0;
+  if (historyLength >= 50) {
+    powerUserScore += 18;
+    powerUserSignals.push('Long browser history');
+  } else if (historyLength >= 30) {
+    powerUserScore += 12;
+  } else if (historyLength >= 15) {
+    powerUserScore += 6;
+  }
+
+  // Multiple granted permissions indicate trust in browser capabilities
+  if (clientInfo.permissions) {
+    const grantedPermissions = Object.entries(clientInfo.permissions)
+      .filter(([, p]) => p === 'granted')
+      .map(([name]) => name);
+    if (grantedPermissions.length >= 4) {
+      powerUserScore += 20;
+      powerUserSignals.push(`${grantedPermissions.length} browser permissions granted`);
+    } else if (grantedPermissions.length >= 2) {
+      powerUserScore += 10;
+    }
+  }
+
+  // High engagement metrics
+  const engagement = clientInfo.advancedBehavior?.contentEngagement || 0;
+  if (engagement >= 80) {
+    powerUserScore += 12;
+  }
+
+  // TIER 4: Hardware signals (power users often have better hardware)
+  // Multi-monitor setup detection (via screen size inconsistencies or reported)
+  const totalScreenArea = (clientInfo.screenWidth || 0) * (clientInfo.screenHeight || 0);
+  if ((clientInfo.screenWidth || 0) >= 3840 || totalScreenArea >= 3840 * 1080) {
     powerUserScore += 8;
   }
 
-  // Granted permissions
-  if (clientInfo.permissions) {
-    const granted = Object.values(clientInfo.permissions).filter(p => p === 'granted').length;
-    if (granted >= 3) powerUserScore += 15;
+  // High-end hardware
+  if ((clientInfo.hardwareConcurrency || 0) >= 8 && ram >= 8) {
+    powerUserScore += 8;
   }
+
+  // TIER 5: Negative signals (reduce false positives)
+  // Very low interaction could indicate casual user despite other signals
+  const totalInteractions = (clientInfo.advancedBehavior?.copyCount || 0) +
+    (clientInfo.advancedBehavior?.pasteCount || 0) +
+    (clientInfo.advancedBehavior?.textSelectCount || 0) +
+    (clientInfo.advancedBehavior?.rightClickCount || 0);
+
+  if (totalInteractions === 0 && shortcutCount === 0) {
+    // Very passive user - reduce score
+    powerUserScore = Math.max(0, powerUserScore - 15);
+  }
+
+  // Many rage clicks suggest frustration/inexperience
+  if ((clientInfo.advancedBehavior?.rageClickCount || 0) >= 3) {
+    powerUserScore = Math.max(0, powerUserScore - 10);
+  }
+
+  // Set power user reason from strongest signal
+  powerUserReason = powerUserSignals[0] || '';
 
   // ============ PRIVACY CONSCIOUS DETECTION ============
   if (clientInfo.adBlockerDetected) {
@@ -1064,7 +1383,7 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
   }
 
   // WebRTC blocked (privacy extension)
-  if (clientInfo.webrtcLocalIPs?.length === 0 && clientInfo.webrtcSupported) {
+  if (clientInfo.webrtcLocalIPs?.length === 0 && clientInfo.webrtcSupported === true) {
     privacyScore += 20;
     privacyReason = privacyReason || 'WebRTC blocked';
   }
@@ -1077,21 +1396,21 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
 
   // ============ DEVICE VALUE ESTIMATION ============
   let baseValue = 0;
-  const cores = clientInfo.hardwareConcurrency || 4;
-  const ram = clientInfo.deviceMemory || 4;
+  const deviceCores = clientInfo.hardwareConcurrency || 4;
+  const deviceRam = clientInfo.deviceMemory || 4;
 
   // GPU value
   baseValue += gpu.estimatedValue;
 
   // CPU cores estimation
-  if (cores >= 16) baseValue += 400;
-  else if (cores >= 12) baseValue += 250;
-  else if (cores >= 8) baseValue += 150;
-  else if (cores >= 6) baseValue += 80;
+  if (deviceCores >= 16) baseValue += 400;
+  else if (deviceCores >= 12) baseValue += 250;
+  else if (deviceCores >= 8) baseValue += 150;
+  else if (deviceCores >= 6) baseValue += 80;
 
   // RAM estimation (capped at 8 by browser, so add more if at cap)
-  if (ram >= 8) baseValue += 200; // Likely 16-64GB
-  else if (ram >= 4) baseValue += 50;
+  if (deviceRam >= 8) baseValue += 200; // Likely 16-64GB
+  else if (deviceRam >= 4) baseValue += 50;
 
   // Display value
   const screenRes = (clientInfo.screenWidth || 0) * (clientInfo.screenHeight || 0);
@@ -1110,13 +1429,13 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
     deviceTier = 'premium';
     estimatedDeviceValue = '$3,000+';
   } else if (baseValue >= 1500) {
-    deviceTier = 'premium';
+    deviceTier = 'high-end';
     estimatedDeviceValue = '$2,000-$3,000';
   } else if (baseValue >= 800) {
-    deviceTier = 'high-end';
+    deviceTier = 'mid-range';
     estimatedDeviceValue = '$1,200-$2,000';
   } else if (baseValue >= 400) {
-    deviceTier = 'mid-range';
+    deviceTier = 'budget';
     estimatedDeviceValue = '$600-$1,200';
   } else {
     deviceTier = 'budget';
@@ -1183,7 +1502,7 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
     fraudIndicators.push('VPN/Proxy detected');
   }
   if (clientInfo.vpnDetection?.timezoneIPMismatch) {
-    fraudRiskScore += 25;
+    fraudRiskScore += 12;
     fraudIndicators.push('Timezone doesn\'t match IP location');
   }
   if (clientInfo.isIncognito) {
@@ -1228,17 +1547,22 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
   const likelyCountry = inferCountry(clientInfo.timezone || '');
 
   // ============ RETURN PROFILE ============
+  // Thresholds calibrated for improved scoring:
+  // - Developer: 55+ (requires at least one strong signal like DevTools or dev extension)
+  // - Gamer: 40+ (requires discrete GPU or gamepad, not just resolution/cores)
+  // - Designer: 35+ (requires color-accurate display or Apple Pro hardware)
+  // - Power User: 35+ (requires keyboard shortcuts or multiple extensions)
   return {
-    likelyDeveloper: developerScore >= 35,
+    likelyDeveloper: developerScore >= 55,
     developerScore: Math.min(developerScore, 100),
     developerReason: developerReason || undefined,
-    likelyGamer: gamerScore >= 35,
+    likelyGamer: gamerScore >= 40,
     gamerScore: Math.min(gamerScore, 100),
     gamerReason: gamerReason || undefined,
-    likelyDesigner: designerScore >= 30,
+    likelyDesigner: designerScore >= 35,
     designerScore: Math.min(designerScore, 100),
     designerReason: designerReason || undefined,
-    likelyPowerUser: powerUserScore >= 30,
+    likelyPowerUser: powerUserScore >= 35,
     powerUserScore: Math.min(powerUserScore, 100),
     powerUserReason: powerUserReason || undefined,
     privacyConscious: privacyScore >= 30,
@@ -1249,7 +1573,7 @@ export function generateUserProfile(clientInfo: Partial<ClientInfo>): UserProfil
     deviceAge,
     humanScore: Math.max(humanScore, 0),
     botIndicators,
-    likelyTechSavvy: developerScore >= 25 || powerUserScore >= 25,
+    likelyTechSavvy: developerScore >= 30 || powerUserScore >= 30,
     likelyMobile: (clientInfo.maxTouchPoints || 0) > 0 && (clientInfo.hardwareFamily?.includes('Phone') || clientInfo.hardwareFamily?.includes('Android') || false),
     likelyWorkDevice: !!(clientInfo.socialLogins?.microsoft || clientInfo.socialLogins?.linkedin),
     likelyCountry,

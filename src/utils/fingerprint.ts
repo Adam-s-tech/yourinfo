@@ -14,6 +14,9 @@ import {
   getInitialAdvancedBehavior,
   generateUserProfile,
 } from './advanced';
+import { getWasmFingerprint } from './wasmFingerprint';
+import { getWebGPUFingerprint } from './webgpuFingerprint';
+import { isChromeAIAvailable } from './chromeAI';
 
 /**
  * Collect all client-side information
@@ -33,6 +36,9 @@ export async function collectClientInfo(): Promise<ClientInfo> {
     clientHints,
     webrtcInfo,
     adBlockerDetected,
+    wasmFingerprint,
+    webgpuFingerprint,
+    chromeAIStatus,
   ] = await Promise.all([
     getBatteryInfo(),
     getConnectionInfo(),
@@ -47,6 +53,9 @@ export async function collectClientInfo(): Promise<ClientInfo> {
     getClientHints(),
     getWebRTCInfo(),
     detectAdBlocker(),
+    getWasmFingerprint(),
+    getWebGPUFingerprint(),
+    isChromeAIAvailable(),
   ]);
 
   const deviceMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory || null;
@@ -235,6 +244,15 @@ export async function collectClientInfo(): Promise<ClientInfo> {
 
     // Advanced behavioral tracking
     advancedBehavior: getInitialAdvancedBehavior(),
+
+    // WASM Fingerprint
+    wasmFingerprint: wasmFingerprint,
+
+    // WebGPU Fingerprint
+    webgpuFingerprint: webgpuFingerprint ?? undefined,
+
+    // Chrome AI Status
+    chromeAIStatus: chromeAIStatus,
 
     // User profile inference (placeholder - will be updated below)
     userProfile: null as unknown as ClientInfo['userProfile'],
@@ -700,8 +718,8 @@ async function getWebRTCInfo(): Promise<{ localIPs: string[]; supported: boolean
           }
         }
 
-        // Also check for IPv6
-        const ipv6Match = candidate.match(/([a-f0-9:]+:+)+[a-f0-9]+/i);
+        // Also check for IPv6 - use stricter pattern requiring valid format
+        const ipv6Match = candidate.match(/(?:[a-f0-9]{1,4}:){7}[a-f0-9]{1,4}|(?:[a-f0-9]{1,4}:){1,7}:|(?:[a-f0-9]{1,4}:){1,6}:[a-f0-9]{1,4}|(?:[a-f0-9]{1,4}:){1,5}(?::[a-f0-9]{1,4}){1,2}|(?:[a-f0-9]{1,4}:){1,4}(?::[a-f0-9]{1,4}){1,3}|(?:[a-f0-9]{1,4}:){1,3}(?::[a-f0-9]{1,4}){1,4}|(?:[a-f0-9]{1,4}:){1,2}(?::[a-f0-9]{1,4}){1,5}|[a-f0-9]{1,4}:(?::[a-f0-9]{1,4}){1,6}|:(?::[a-f0-9]{1,4}){1,7}|::(?:[a-f0-9]{1,4}:){0,5}[a-f0-9]{1,4}|fe80:(?::[a-f0-9]{0,4}){0,4}%[0-9a-z]+/i);
         if (ipv6Match && !localIPs.includes(ipv6Match[0])) {
           localIPs.push(ipv6Match[0]);
         }
@@ -887,11 +905,23 @@ function getBrowserInfo(): { browserName: string; browserVersion: string } {
  */
 async function detectIncognito(): Promise<boolean | null> {
   try {
-    // Chrome/Chromium method - storage quota is limited in incognito
+    // Chrome/Chromium method - compare storage quota against performance memory
     if ('storage' in navigator && 'estimate' in navigator.storage) {
       const { quota } = await navigator.storage.estimate();
-      // Incognito usually has quota < 120MB
-      if (quota && quota < 120000000) return true;
+      const perf = performance as Performance & {
+        memory?: { jsHeapSizeLimit: number };
+      };
+      // In incognito, quota is significantly reduced relative to available memory
+      // Normal mode: quota is typically in GB range; Incognito: usually < 200MB
+      // Use ratio check: if quota exists but is less than 1GB AND memory API shows
+      // more available memory, likely incognito
+      if (quota) {
+        const memLimit = perf.memory?.jsHeapSizeLimit || 0;
+        // If quota < 200MB and either no memory API or memory limit is much higher
+        if (quota < 200000000 && (memLimit === 0 || memLimit > quota * 10)) {
+          return true;
+        }
+      }
     }
 
     // Firefox method - indexedDB behaves differently
@@ -997,7 +1027,7 @@ function detectVirtualMachine(): boolean | null {
       const debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
       if (debugInfo) {
         const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL).toLowerCase();
-        const vmIndicators = ['vmware', 'virtualbox', 'virtual', 'parallels', 'hyper-v', 'qemu', 'xen'];
+        const vmIndicators = ['vmware', 'virtualbox', 'virtual', 'parallels', 'hyper-v', 'qemu', 'xen', 'hyperv', 'kvm', 'docker', 'wsl'];
         for (const indicator of vmIndicators) {
           if (renderer.includes(indicator)) return true;
         }

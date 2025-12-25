@@ -6,14 +6,25 @@
 import { createClient, type RedisClientType } from 'redis';
 import type { ClientInfo, UserProfile } from '../src/types';
 
-// Initialize Grok AI
+// Initialize Grok AI (Primary)
 const GROK_API_KEY = process.env.GROK_API_KEY;
 const GROK_API_URL = 'https://api.x.ai/v1/chat/completions';
 
+// Initialize OpenRouter with MiMo (Fallback)
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const MIMO_MODEL = 'xiaomi/mimo-v2-flash:free';
+
 if (GROK_API_KEY) {
-  console.log('Grok AI initialized');
+  console.log('Grok AI initialized (primary)');
 } else {
-  console.warn('GROK_API_KEY not set - AI profiling disabled');
+  console.warn('GROK_API_KEY not set - Grok AI disabled');
+}
+
+if (OPENROUTER_API_KEY) {
+  console.log('OpenRouter MiMo initialized (fallback)');
+} else {
+  console.warn('OPENROUTER_API_KEY not set - MiMo fallback disabled');
 }
 
 // Initialize Redis clients (separate for caching and tracking)
@@ -114,8 +125,8 @@ async function getTrackingRedis(): Promise<RedisClientType | null> {
   }
 }
 
-// Cache TTL: 1 year (profile doesn't change, save AI costs)
-const CACHE_TTL = 60 * 60 * 24 * 365;
+// Cache TTL: 30 days (balance freshness vs AI costs)
+const CACHE_TTL = 60 * 60 * 24 * 30;
 
 // Rate limiting: max 2 AI requests per minute PER USER
 const RATE_LIMIT_WINDOW = 60 * 1000; // milliseconds
@@ -367,48 +378,50 @@ Respond with a JSON object (no markdown, just pure JSON) with these EXACT fields
   "ageRange": string (e.g., "25-35"),
   "occupation": string (best guess),
 
-  "relationshipStatus": "single" | "in-relationship" | "married" | "unknown",
+  // SPECULATIVE FIELDS - These are highly speculative inferences with low confidence.
+  // Only provide values when there is strong supporting evidence. Use "unknown" when uncertain.
+  "relationshipStatus": "single" | "in-relationship" | "married" | "unknown" (speculative),
   "relationshipReason": string,
-  "educationLevel": "high-school" | "some-college" | "bachelors" | "masters" | "phd" | "unknown",
+  "educationLevel": "high-school" | "some-college" | "bachelors" | "masters" | "phd" | "unknown" (speculative),
   "educationReason": string,
-  "politicalLeaning": "liberal" | "moderate" | "conservative" | "unknown",
+  "politicalLeaning": "liberal" | "moderate" | "conservative" | "unknown" (speculative),
   "politicalReason": string,
-  "lifeSituation": string (e.g., "Urban professional", "Suburban family", "College student"),
-  "financialHealth": "struggling" | "stable" | "comfortable" | "wealthy",
+  "lifeSituation": string (speculative, e.g., "Urban professional", "Suburban family", "College student"),
+  "financialHealth": "struggling" | "stable" | "comfortable" | "wealthy" (speculative),
   "financialReason": string,
-  "workStyle": "remote" | "office" | "hybrid" | "freelance" | "unemployed" | "student",
+  "workStyle": "remote" | "office" | "hybrid" | "freelance" | "unemployed" | "student" (speculative),
   "workReason": string,
-  "sleepSchedule": "early-bird" | "night-owl" | "irregular" | "normal",
+  "sleepSchedule": "early-bird" | "night-owl" | "irregular" | "normal" (speculative),
   "sleepReason": string,
-  "stressLevel": "low" | "moderate" | "high" | "burnout",
+  "stressLevel": "low" | "moderate" | "high" | "burnout" (speculative),
   "stressReason": string,
-  "socialLife": "introvert" | "ambivert" | "extrovert",
+  "socialLife": "introvert" | "ambivert" | "extrovert" (speculative),
   "socialReason": string,
-  "likelyParent": boolean,
+  "likelyParent": boolean (speculative),
   "parentReason": string,
-  "petOwner": boolean,
+  "petOwner": boolean (speculative),
   "petType": string | null,
-  "homeowner": boolean,
+  "homeowner": boolean (speculative),
   "homeReason": string,
-  "carOwner": boolean,
+  "carOwner": boolean (speculative),
   "carType": string | null,
-  "healthConscious": boolean,
+  "healthConscious": boolean (speculative),
   "healthReason": string,
-  "dietaryPreference": string | null,
-  "coffeeOrTea": "coffee" | "tea" | "both" | "neither",
-  "drinksAlcohol": boolean,
-  "smokes": boolean,
-  "fitnessLevel": "sedentary" | "light" | "moderate" | "athletic",
+  "dietaryPreference": string | null (speculative),
+  "coffeeOrTea": "coffee" | "tea" | "both" | "neither" (speculative),
+  "drinksAlcohol": boolean (speculative),
+  "smokes": boolean (speculative),
+  "fitnessLevel": "sedentary" | "light" | "moderate" | "athletic" (speculative),
   "fitnessReason": string,
-  "lifeEvents": string[],
-  "shoppingHabits": "frugal" | "moderate" | "spender" | "luxury",
+  "lifeEvents": string[] (speculative),
+  "shoppingHabits": "frugal" | "moderate" | "spender" | "luxury" (speculative),
   "shoppingReason": string,
-  "brandPreference": string[],
-  "streamingServices": string[],
-  "musicTaste": string[],
-  "travelFrequency": "rarely" | "occasionally" | "frequently" | "constant",
+  "brandPreference": string[] (speculative),
+  "streamingServices": string[] (speculative),
+  "musicTaste": string[] (speculative),
+  "travelFrequency": "rarely" | "occasionally" | "frequently" | "constant" (speculative),
   "travelReason": string,
-  "creepyInsights": string[]
+  "creepyInsights": string[] (speculative)
 }
 
 Be accurate based on the data. Use ALL available signals:
@@ -458,9 +471,152 @@ INSTALLED APPS:
 - Spotify = music lover
 - Steam = gamer
 
-Be bold with inferences - this is an educational demo showing how much can be inferred.
+Be conservative and only infer based on strong signals - avoid speculation when data is insufficient.
 
 Respond ONLY with the JSON object, no explanation.`;
+}
+
+/**
+ * Generate a rule-based fallback profile when AI is unavailable
+ * Uses deterministic heuristics based on client fingerprint data
+ */
+function generateFallbackProfile(clientInfo: Partial<ClientInfo>, geo?: GeoData): UserProfile {
+  // Developer detection
+  const developerFonts = ['Fira Code', 'JetBrains Mono', 'Source Code Pro', 'Consolas', 'Monaco', 'Menlo', 'Cascadia Code', 'Hack'];
+  const developerExtensions = ['react devtools', 'vue devtools', 'redux devtools', 'angular devtools', 'vscode'];
+  const hasDeveloperFonts = clientInfo.fontsDetected?.some(f => developerFonts.some(df => f.toLowerCase().includes(df.toLowerCase()))) ?? false;
+  const hasDeveloperExtensions = clientInfo.extensionsDetected?.some(e => developerExtensions.some(de => e.toLowerCase().includes(de.toLowerCase()))) ?? false;
+  const hasDevToolsOpen = clientInfo.advancedBehavior?.devToolsOpen ?? false;
+  const developerScore = Math.min(100, (hasDeveloperFonts ? 40 : 0) + (hasDeveloperExtensions ? 40 : 0) + (hasDevToolsOpen ? 30 : 0));
+  const likelyDeveloper = developerScore >= 40;
+
+  // Gamer detection
+  const hasGamepad = clientInfo.gamepadsSupported ?? false;
+  const hasGamingGPU = /RTX|GTX|Radeon RX|GeForce/i.test(clientInfo.webglRenderer || '');
+  const hasDiscord = clientInfo.installedApps?.includes('discord') ?? false;
+  const hasSteam = clientInfo.installedApps?.includes('steam') ?? false;
+  const gamerScore = Math.min(100, (hasGamepad ? 30 : 0) + (hasGamingGPU ? 30 : 0) + (hasDiscord ? 20 : 0) + (hasSteam ? 30 : 0));
+  const likelyGamer = gamerScore >= 40;
+
+  // Designer detection
+  const hasHighDPI = (clientInfo.devicePixelRatio ?? 1) >= 2;
+  const hasWideGamut = clientInfo.colorGamut === 'p3' || clientInfo.colorGamut === 'rec2020';
+  const hasHDR = clientInfo.hdrSupported ?? false;
+  const highResolution = (clientInfo.screenWidth ?? 0) >= 2560;
+  const designerScore = Math.min(100, (hasHighDPI ? 25 : 0) + (hasWideGamut ? 25 : 0) + (hasHDR ? 25 : 0) + (highResolution ? 25 : 0));
+  const likelyDesigner = designerScore >= 50;
+
+  // Power user detection
+  const highCores = (clientInfo.hardwareConcurrency ?? 0) >= 8;
+  const highRAM = (clientInfo.deviceMemory ?? 0) >= 16;
+  const multipleLanguages = (clientInfo.languages?.length ?? 0) >= 3;
+  const keyboardShortcutsCount = clientInfo.advancedBehavior?.keyboardShortcutsUsed?.length ?? 0;
+  const usesKeyboardShortcuts = keyboardShortcutsCount > 3;
+  const powerUserScore = Math.min(100, (highCores ? 25 : 0) + (highRAM ? 25 : 0) + (multipleLanguages ? 20 : 0) + (usesKeyboardShortcuts ? 30 : 0));
+  const likelyPowerUser = powerUserScore >= 50;
+
+  // Privacy detection
+  const hasAdBlocker = clientInfo.adBlockerDetected ?? false;
+  const hasDNT = clientInfo.doNotTrack ?? false;
+  const hasGPC = clientInfo.globalPrivacyControl ?? false;
+  const isIncognito = clientInfo.isIncognito ?? false;
+  const hasVPN = clientInfo.vpnDetection?.likelyUsingVPN ?? false;
+  const privacyScore = Math.min(100, (hasAdBlocker ? 25 : 0) + (hasDNT ? 15 : 0) + (hasGPC ? 20 : 0) + (isIncognito ? 25 : 0) + (hasVPN ? 25 : 0));
+  const privacyConscious = privacyScore >= 40;
+
+  // Device tier estimation
+  const ramGB = clientInfo.deviceMemory ?? 4;
+  const cores = clientInfo.hardwareConcurrency ?? 4;
+  let deviceTier: 'budget' | 'mid-range' | 'high-end' | 'premium' = 'mid-range';
+  let estimatedDeviceValue = '$500-$1,000';
+  if (ramGB >= 32 || cores >= 16 || hasGamingGPU) {
+    deviceTier = 'premium';
+    estimatedDeviceValue = '$2,000-$4,000';
+  } else if (ramGB >= 16 || cores >= 8) {
+    deviceTier = 'high-end';
+    estimatedDeviceValue = '$1,000-$2,000';
+  } else if (ramGB <= 4 && cores <= 4) {
+    deviceTier = 'budget';
+    estimatedDeviceValue = '$200-$500';
+  }
+
+  // Mobile detection
+  const likelyMobile = (clientInfo.maxTouchPoints ?? 0) > 1 && /Mobile|Android|iPhone|iPad/i.test(clientInfo.platform || '');
+
+  // Bot detection
+  const isAutomated = clientInfo.isAutomated ?? false;
+  const isHeadless = clientInfo.isHeadless ?? false;
+  const isVM = clientInfo.isVirtualMachine ?? false;
+  const botIndicators: string[] = [];
+  if (isAutomated) botIndicators.push('Automation detected');
+  if (isHeadless) botIndicators.push('Headless browser');
+  if (isVM) botIndicators.push('Virtual machine');
+  const humanScore = Math.max(0, 100 - (isAutomated ? 50 : 0) - (isHeadless ? 30 : 0) - (isVM ? 20 : 0));
+
+  // Inferred interests based on detected apps/extensions
+  const inferredInterests: string[] = [];
+  if (likelyDeveloper) inferredInterests.push('Software Development', 'Technology');
+  if (likelyGamer) inferredInterests.push('Gaming', 'Entertainment');
+  if (likelyDesigner) inferredInterests.push('Design', 'Creative Work');
+  if (clientInfo.cryptoWallets?.length) inferredInterests.push('Cryptocurrency', 'Finance');
+  // Check if any social login is detected
+  const socialLogins = clientInfo.socialLogins;
+  if (socialLogins && (socialLogins.google || socialLogins.facebook || socialLogins.twitter || socialLogins.github)) {
+    inferredInterests.push('Social Media');
+  }
+
+  // Fraud indicators
+  const fraudIndicators: string[] = [];
+  if (isAutomated) fraudIndicators.push('Automation detected');
+  if (hasVPN && isIncognito) fraudIndicators.push('VPN + Incognito mode');
+  if (isHeadless) fraudIndicators.push('Headless browser');
+  const fraudRiskScore = Math.min(100, fraudIndicators.length * 25);
+
+  return {
+    likelyDeveloper,
+    developerScore,
+    developerReason: likelyDeveloper
+      ? `Detected: ${[hasDeveloperFonts && 'coding fonts', hasDeveloperExtensions && 'dev extensions', hasDevToolsOpen && 'DevTools open'].filter(Boolean).join(', ')}`
+      : 'No strong developer indicators',
+    likelyGamer,
+    gamerScore,
+    gamerReason: likelyGamer
+      ? `Detected: ${[hasGamingGPU && 'gaming GPU', hasGamepad && 'gamepad support', hasDiscord && 'Discord', hasSteam && 'Steam'].filter(Boolean).join(', ')}`
+      : 'No strong gaming indicators',
+    likelyDesigner,
+    designerScore,
+    designerReason: likelyDesigner
+      ? `Detected: ${[hasHighDPI && 'high DPI display', hasWideGamut && 'wide color gamut', hasHDR && 'HDR support', highResolution && 'high resolution'].filter(Boolean).join(', ')}`
+      : 'No strong designer indicators',
+    likelyPowerUser,
+    powerUserScore,
+    powerUserReason: likelyPowerUser
+      ? `Detected: ${[highCores && 'high CPU cores', highRAM && 'high RAM', usesKeyboardShortcuts && 'keyboard shortcuts'].filter(Boolean).join(', ')}`
+      : 'Average user setup',
+    privacyConscious,
+    privacyScore,
+    privacyReason: privacyConscious
+      ? `Detected: ${[hasAdBlocker && 'ad blocker', hasDNT && 'DNT', hasGPC && 'GPC', isIncognito && 'incognito', hasVPN && 'VPN'].filter(Boolean).join(', ')}`
+      : 'Standard privacy settings',
+    deviceTier,
+    estimatedDeviceValue,
+    deviceAge: 'recent',
+    humanScore,
+    botIndicators,
+    likelyTechSavvy: likelyDeveloper || likelyPowerUser || privacyConscious,
+    likelyMobile,
+    likelyWorkDevice: !likelyGamer && (cores >= 8 || ramGB >= 16),
+    likelyCountry: geo?.country || 'Unknown',
+    inferredInterests,
+    fraudRiskScore,
+    fraudIndicators,
+    // Additional fields with fallback values
+    personalityTraits: likelyDeveloper ? ['Analytical', 'Detail-oriented'] : ['Curious'],
+    incomeLevel: deviceTier === 'premium' ? 'high' : deviceTier === 'high-end' ? 'medium' : 'medium',
+    ageRange: '25-45',
+    occupation: likelyDeveloper ? 'Tech Professional' : likelyDesigner ? 'Creative Professional' : 'Unknown',
+    aiGenerated: false,
+  } as UserProfile;
 }
 
 /**
@@ -591,21 +747,94 @@ export async function generateAIProfile(clientInfo: Partial<ClientInfo>, geo?: G
     return { profile: cached, source: 'cache' };
   }
 
-  // If no AI available, return null (will use fallback)
-  if (!GROK_API_KEY) {
-    return { profile: null, source: 'fallback', error: 'AI not configured' };
+  // If no AI available at all, use rule-based fallback
+  if (!GROK_API_KEY && !OPENROUTER_API_KEY) {
+    console.log('No AI configured - using rule-based fallback');
+    const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+    return { profile: fallbackProfile, source: 'fallback', error: 'No AI configured' };
   }
 
   // Check rate limit (per user)
   const userId = `${fingerprintId}:${crossBrowserId}`;
   if (!checkRateLimit(userId)) {
-    console.log(`Rate limited user ${userId} - using fallback`);
-    return { profile: null, source: 'fallback', error: 'Rate limited' };
+    console.log(`Rate limited user ${userId} - using rule-based fallback`);
+    const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+    return { profile: fallbackProfile, source: 'fallback', error: 'Rate limited' };
   }
 
-  try {
-    const prompt = buildPrompt(clientInfo, geo);
+  const prompt = buildPrompt(clientInfo, geo);
+  const systemMessage = 'You are a user profiling AI for an educational privacy demonstration. Analyze browser fingerprint data and infer personal details. Always respond with valid JSON only, no markdown.';
 
+  // Helper function to call MiMo via OpenRouter
+  async function tryMiMo(): Promise<{ profile: UserProfile | null; error?: string }> {
+    if (!OPENROUTER_API_KEY) {
+      return { profile: null, error: 'OpenRouter not configured' };
+    }
+
+    try {
+      console.log('Attempting MiMo fallback via OpenRouter...');
+      const mimoResponse = await fetch(OPENROUTER_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://yourinfo.hsingh.app',
+          'X-Title': 'YourInfo Privacy Demo',
+        },
+        body: JSON.stringify({
+          model: MIMO_MODEL,
+          messages: [
+            { role: 'system', content: systemMessage },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 4096,
+          temperature: 0.5,
+          reasoning: { enabled: false }, // Disable reasoning for faster responses
+        }),
+      });
+
+      if (!mimoResponse.ok) {
+        const errorText = await mimoResponse.text();
+        console.error('MiMo API error:', mimoResponse.status, errorText);
+        return { profile: null, error: `MiMo API error: ${mimoResponse.status}` };
+      }
+
+      const mimoData = await mimoResponse.json();
+      const mimoText = mimoData.choices?.[0]?.message?.content;
+
+      if (!mimoText) {
+        return { profile: null, error: 'Empty MiMo response' };
+      }
+
+      const mimoProfile = parseAIResponse(mimoText);
+      if (mimoProfile) {
+        console.log('MiMo profile generated successfully');
+        (mimoProfile as UserProfile & { aiGenerated: boolean; aiSource: string }).aiGenerated = true;
+        (mimoProfile as UserProfile & { aiSource: string }).aiSource = 'mimo';
+        return { profile: mimoProfile };
+      }
+
+      return { profile: null, error: 'Failed to parse MiMo response' };
+    } catch (err) {
+      console.error('MiMo error:', err);
+      return { profile: null, error: String(err) };
+    }
+  }
+
+  // If Grok is not configured, go straight to MiMo
+  if (!GROK_API_KEY) {
+    console.log('Grok not configured, using MiMo directly...');
+    const mimoResult = await tryMiMo();
+    if (mimoResult.profile) {
+      await cacheProfile(cacheKey, mimoResult.profile);
+      return { profile: mimoResult.profile, source: 'ai' as const };
+    }
+    const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+    return { profile: fallbackProfile, source: 'fallback', error: mimoResult.error };
+  }
+
+  // Try Grok first (primary AI)
+  try {
     const response = await fetch(GROK_API_URL, {
       method: 'POST',
       headers: {
@@ -615,48 +844,79 @@ export async function generateAIProfile(clientInfo: Partial<ClientInfo>, geo?: G
       body: JSON.stringify({
         model: 'grok-4-1-fast-reasoning',
         messages: [
-          {
-            role: 'system',
-            content: 'You are a user profiling AI for an educational privacy demonstration. Analyze browser fingerprint data and infer personal details. Always respond with valid JSON only, no markdown.'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
+          { role: 'system', content: systemMessage },
+          { role: 'user', content: prompt }
         ],
         stream: false,
-        temperature: 0.3,
+        temperature: 0.5,
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
       console.error('Grok API error:', response.status, errorText);
-      return { profile: null, source: 'fallback', error: `Grok API error: ${response.status}` };
+
+      // Try MiMo fallback before rule-based
+      const mimoResult = await tryMiMo();
+      if (mimoResult.profile) {
+        await cacheProfile(cacheKey, mimoResult.profile);
+        return { profile: mimoResult.profile, source: 'ai' as const };
+      }
+
+      // Use rule-based fallback if MiMo also fails
+      const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+      return { profile: fallbackProfile, source: 'fallback', error: `Grok: ${response.status}, MiMo: ${mimoResult.error}` };
     }
 
     const data = await response.json();
     const text = data.choices?.[0]?.message?.content;
 
     if (!text) {
-      return { profile: null, source: 'fallback', error: 'Empty AI response' };
+      // Try MiMo fallback
+      const mimoResult = await tryMiMo();
+      if (mimoResult.profile) {
+        await cacheProfile(cacheKey, mimoResult.profile);
+        return { profile: mimoResult.profile, source: 'ai' as const };
+      }
+
+      const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+      return { profile: fallbackProfile, source: 'fallback', error: 'Empty Grok response' };
     }
 
     const profile = parseAIResponse(text);
     if (!profile) {
-      return { profile: null, source: 'fallback', error: 'Failed to parse AI response' };
+      // Try MiMo fallback
+      const mimoResult = await tryMiMo();
+      if (mimoResult.profile) {
+        await cacheProfile(cacheKey, mimoResult.profile);
+        return { profile: mimoResult.profile, source: 'ai' as const };
+      }
+
+      const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+      return { profile: fallbackProfile, source: 'fallback', error: 'Failed to parse Grok response' };
     }
 
-    // Mark as AI-generated
-    (profile as UserProfile & { aiGenerated: boolean }).aiGenerated = true;
+    // Mark as AI-generated (Grok)
+    (profile as UserProfile & { aiGenerated: boolean; aiSource: string }).aiGenerated = true;
+    (profile as UserProfile & { aiSource: string }).aiSource = 'grok';
 
     // Cache the result
     await cacheProfile(cacheKey, profile);
 
     return { profile, source: 'ai' };
   } catch (err) {
-    console.error('AI profiling error:', err);
-    return { profile: null, source: 'fallback', error: String(err) };
+    console.error('Grok AI profiling error:', err);
+
+    // Try MiMo fallback before rule-based
+    const mimoResult = await tryMiMo();
+    if (mimoResult.profile) {
+      await cacheProfile(cacheKey, mimoResult.profile);
+      return { profile: mimoResult.profile, source: 'ai' as const };
+    }
+
+    // Use rule-based fallback on any exception
+    const fallbackProfile = generateFallbackProfile(clientInfo, geo);
+    return { profile: fallbackProfile, source: 'fallback', error: `Grok: ${String(err)}, MiMo: ${mimoResult.error}` };
   }
 }
 
